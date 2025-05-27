@@ -1,0 +1,102 @@
+{% load static %}
+ {% include "includes/alert.html" %}
+<!-- Container-fluid starts-->
+<div class="container-fluid list-product-view product-wrapper">
+  <div class="row"> 
+    <div class="col-sm-12"> 
+      <div class="row g-3">
+        <div class="col-md-3 col-sm-6">
+          <div class="product-sidebar">
+            <div class="card-header card-no-border text-end">
+  <div class="d-flex justify-content-right  align-items-center">
+
+    {# Inline Excel upload form #}
+    <form
+      method="post"
+      action="{% url 'upload_excel' %}"
+      enctype="multipart/form-data"
+      class="d-flex me-1"
+    >
+      {% csrf_token %}
+      <input
+        type="file"
+        name="file"
+        accept=".xls,.xlsx"
+        class="form-control form-control-lg"
+        style="width: auto; margin-right:5px"
+        required
+      />
+      <button type="submit" class="btn btn-primary f-w-500">
+        <i class="fa fa-upload pe-1"></i>Upload
+      </button>
+    </form>
+
+    {# Existing Add Products button #}
+  </div>
+</div>
+           <br>
+
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header card-no-border text-end">
+          <div class="card-header-right-icon"><a class="btn btn-primary f-w-500" href=""><i class="fa fa-plus pe-2"></i>Add Products</a></div>
+        </div>
+        <div class="card-body px-0 pt-0">
+          <div class="list-product">
+            <div class="recent-table table-responsive custom-scrollbar product-list-table">
+              <table class="table" id="product-list-view">
+                <thead> 
+                  <tr> 
+                    <th></th>
+                    <th> <span class="c-o-light f-w-600">Emri</span></th>
+                    <th> <span class="c-o-light f-w-600">File Name</span></th>
+                    <th> <span class="c-o-light f-w-600">Data/Ora</span></th>
+                    <th> <span class="c-o-light f-w-600">Artikujt e Vendosur</span></th>
+                    <th> <span class="c-o-light f-w-600">Status</span></th>
+                    <th> <span class="c-o-light f-w-600">Action</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+
+                 {% for log in request.user.excel_uploads.all %}
+                  <tr class="product-removes">
+                    <td></td>
+                    <td> 
+                      <div class="product-names">
+                        <p>{{ log.username }}</p>
+                      </div>
+                    </td>
+                    <td> 
+                      <p class="c-o-light">{{ log.file_name }}</p>
+                    </td>
+                    <td> 
+                      <p class="c-o-light">{{ log.uploaded_at|date:"Y-m-d H:i" }}</p>
+                    </td>
+                    <td> 
+                      <p class="c-o-light">{{ log.row_count }}</p>
+                    </td>
+                    <td> <span class="badge badge-light-secondary">Passiv</span></td>
+
+                    <td> 
+                      <div class="product-action">
+                         <a class="square-white trash-3" href="#!">
+                          <svg>
+                            <use href="{% static 'assets/svg/icon-sprite.svg' %}#trash1"></use>
+                          </svg></a></div>
+                    </td>
+                  </tr>
+                   {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- Container-fluid Ends-->
