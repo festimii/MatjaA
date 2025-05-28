@@ -7,7 +7,9 @@ urlpatterns = [
     #-------------------------General(Dashboards,Widgets & Layout)---------------------------------------
 
     path('upload-excel/',  upload_excel,  name='upload_excel'),
-    # #-----------------------Dashboards
+    # #-----------------------Dashboards#
+    path('delete-excel-batch/<uuid:batch_id>/', views.delete_excel_batch, name='delete_excel_batch'),
+
     path('', views.list_products, name='list_products'),
     path('list_products', views.list_products, name='list_products'),
     path('dashboard_02', views.dashboard_02, name="dashboard_02"),

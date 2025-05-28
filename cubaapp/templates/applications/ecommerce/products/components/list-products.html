@@ -81,13 +81,21 @@
                     </td>
                     <td> <span class="badge badge-light-secondary">Passiv</span></td>
 
-                    <td> 
-                      <div class="product-action">
-                         <a class="square-white trash-3" href="#!">
-                          <svg>
-                            <use href="{% static 'assets/svg/icon-sprite.svg' %}#trash1"></use>
-                          </svg></a></div>
-                    </td>
+<td>
+  {% if log.batch_id %}
+  <form method="post" action="{% url 'delete_excel_batch' batch_id=log.batch_id %}" class="delete-form">
+    {% csrf_token %}
+    <button type="button" class="trash-3" style="border: none; background: none;">
+      <svg>
+        <use href="{% static 'assets/svg/icon-sprite.svg' %}#trash1"></use>
+      </svg>
+    </button>
+  </form>
+  {% else %}
+  <span class="badge badge-light-danger">No ID</span>
+  {% endif %}
+</td>
+
                   </tr>
                    {% endfor %}
                 </tbody>
@@ -100,3 +108,32 @@
   </div>
 </div>
 <!-- Container-fluid Ends-->
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".trash-3").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      const form = btn.closest("form");
+
+      if (!form) {
+        console.error("No form found for trash button");
+        return;
+      }
+
+      Swal.fire({
+        title: "Are you sure?",
+        text: "Do you really want to delete this upload?",
+        showCancelButton: true,
+        confirmButtonColor: "#16C7F9",
+        cancelButtonColor: "#FC4438",
+        confirmButtonText: "Yes, delete it!",
+      }).then((result) => {
+        if (result.isConfirmed) {
+          form.submit();
+        }
+      });
+    });
+  });
+});
+</script>

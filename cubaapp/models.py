@@ -1,3 +1,5 @@
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.core.validators import RegexValidator
 from django.db import models
@@ -117,6 +119,7 @@ class DjangoSession(models.Model):
 
 
 class ExcelRecord(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     nr = models.PositiveIntegerField("Nr.", null=True, blank=True)
     emri_i_aksionit = models.CharField(
         "Emri I Aksionit",
@@ -157,6 +160,8 @@ class ExcelRecord(models.Model):
         null=True,
         blank=True
     )
+    batch_id = models.UUIDField(default=uuid.uuid4, db_index=True)
+
     vfs_1 = models.IntegerField("VFS 1", null=True, blank=True)
     vfs_2 = models.IntegerField("VFS 2", null=True, blank=True)
     vfs_3 = models.IntegerField("VFS 3", null=True, blank=True)
@@ -312,6 +317,7 @@ class ExcelUploadLog(models.Model):
     row_count = models.PositiveIntegerField(
         help_text="How many rows were processed",
     )
+    batch_id = models.UUIDField(default=uuid.uuid4, db_index=True)
 
     class Meta:
         ordering = ["-uploaded_at"]

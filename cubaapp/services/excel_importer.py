@@ -1,16 +1,14 @@
 import logging
-from datetime import date
-
+import uuid
 import pandas as pd
+from datetime import date
+from typing import Tuple
 from django.core.files.uploadedfile import UploadedFile
-from django.core.exceptions import FieldDoesNotExist
-from django.db import models, transaction, DataError
-
+from django.db import models, transaction, IntegrityError
 from cubaapp.models import ExcelRecord
-
+from typing import Dict, Any
 logger = logging.getLogger(__name__)
 
-# 1) Explicit header → model field mapping for the non-VFS fields
 HEADER_MAP = {
     "Nr.":                      "nr",
     "Emri I Aksionit":          "emri_i_aksionit",
@@ -23,27 +21,21 @@ HEADER_MAP = {
     "Total Planifikimi (PAKO)": "total_planifikimi_pako",
 }
 
-def import_excel_from_file(file_obj: UploadedFile) -> int:
-    """
-    Reads an uploaded Excel file and upserts rows into ExcelRecord.
-    - Normalizes `sifra_e_artikullit` to exactly 6 digits (zero-padded).
-    - Pre-logs any string fields that exceed their max_length.
-    - Silently truncates strings to fit the DB schema.
-    Returns the number of rows successfully processed.
-    """
+
+def import_excel_from_file(file_obj: UploadedFile, user, batch_id=None) -> Dict[str, Any]:
+    batch_id = batch_id or uuid.uuid4()
     logger.debug("🔄 Starting Excel import")
 
-    # --- Read into DataFrame ---
     file_obj.seek(0)
     df = pd.read_excel(file_obj)
     df.columns = [c.strip() for c in df.columns]
 
-    # --- Rename headers & filter to model fields ---
     model_fields = {
         f.name
         for f in ExcelRecord._meta.get_fields()
         if isinstance(f, models.Field) and not f.auto_created
     }
+
     full_map = {}
     for hdr, fld in HEADER_MAP.items():
         if hdr in df.columns and fld in model_fields:
@@ -56,7 +48,6 @@ def import_excel_from_file(file_obj: UploadedFile) -> int:
 
     df = df.rename(columns=full_map)[list(full_map.values())]
 
-    # --- Coerce types ---
     for col in ("prej", "deri"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")\
@@ -66,51 +57,54 @@ def import_excel_from_file(file_obj: UploadedFile) -> int:
         if col.startswith("vfs_") or col in ("nr", "total_planifikimi_pako"):
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
-    # --- Split valid vs invalid: must have both code & date ---
-    key_cols = ["sifra_e_artikullit", "prej"]
+    key_cols = ["sifra_e_artikullit", "prej", "deri"]
     df_valid = df.dropna(subset=key_cols)
     df_skip = df[df[key_cols].isna().any(axis=1)]
+
     if not df_skip.empty:
-        logger.warning(
-            "Skipping %d rows missing sifra or prej: %s",
-            len(df_skip),
-            df_skip.index.tolist()
-        )
+        logger.warning("Skipping rows with missing sifra/prej/deri: %s", df_skip.index.tolist())
 
-    # --- Check in-file duplicates ---
-    dupes = df_valid["sifra_e_artikullit"][
-        df_valid["sifra_e_artikullit"].duplicated(keep=False)
-    ]
-    if not dupes.empty:
-        vals = sorted(set(dupes.tolist()))
-        raise ValueError("Duplicate codes in file: " + ", ".join(str(v) for v in vals))
+    duplicate_rows = df_valid.duplicated(subset=key_cols, keep=False)
+    if duplicate_rows.any():
+        dup_df = df_valid[duplicate_rows]
+        dup_keys = dup_df[key_cols].drop_duplicates()
+        dup_str = "; ".join(f"{row.sifra_e_artikullit}, {row.prej}, {row.deri}" for _, row in dup_keys.iterrows())
+        raise ValueError("Duplicate (sifra, prej, deri) combinations in file: " + dup_str)
 
-    # --- Check cross-DB conflicts ---
-    combos = df_valid[key_cols].drop_duplicates().to_records(index=False)
-    conflicts = [
-        (s, d) for s, d in combos
-        if ExcelRecord.objects.filter(sifra_e_artikullit=s, prej=d).exists()
-    ]
-    if conflicts:
-        msg = "; ".join(f"{s} on {d}" for s, d in conflicts)
-        raise ValueError("Conflicting code+date in DB: " + msg)
+    rejected_keys = []
+    insertable_rows = []
 
-    # --- Upsert only valid rows ---
+    for _, row in df_valid.iterrows():
+        sifra = str(int(row["sifra_e_artikullit"])).zfill(6)
+        prej = row["prej"]
+        deri = row["deri"]
+
+        # Overlap logic: (prej_existing <= deri_new) and (deri_existing >= prej_new)
+        conflict_exists = ExcelRecord.objects.filter(
+            sifra_e_artikullit=sifra,
+            user=user,
+            prej__lte=deri,
+            deri__gte=prej
+        ).exists()
+
+        if conflict_exists:
+            rejected_keys.append((sifra, prej, deri))
+            continue
+
+        insertable_rows.append((row, sifra))
+
+    if rejected_keys:
+        reject_str = "; ".join(f"{s} from {p} to {d}" for s, p, d in rejected_keys)
+        logger.warning("❌ Rejected due to overlapping intervals: %s", reject_str)
+
     count = 0
-    for _, row in df_valid.dropna(subset=["nr"]).iterrows():
+    for row, sifra in insertable_rows:
         data = row.to_dict()
         nr = data.pop("nr")
+        data["sifra_e_artikullit"] = sifra
+        data["user"] = user
+        data["batch_id"] = batch_id
 
-        # 1) Normalize `sifra_e_artikullit` to 6 digits
-        raw_code = data.get("sifra_e_artikullit")
-        if raw_code is not None:
-            try:
-                code_int = int(raw_code)
-                data["sifra_e_artikullit"] = str(code_int).zfill(6)
-            except (ValueError, TypeError):
-                raise ValueError(f"Invalid sifra_e_artikullit: {raw_code!r} on row {nr}")
-
-        # 2) Preflight: log any field exceeding its max_length
         for field_name, val in data.items():
             if isinstance(val, str):
                 fld = ExcelRecord._meta.get_field(field_name)
@@ -120,17 +114,26 @@ def import_excel_from_file(file_obj: UploadedFile) -> int:
                         "Row %s: field `%s` is %d chars (max=%d)",
                         nr, field_name, len(val), maxlen
                     )
-                    # 3) Truncate to fit
                     data[field_name] = val[:maxlen]
 
         try:
             with transaction.atomic():
-                ExcelRecord.objects.update_or_create(nr=nr, defaults=data)
-        except DataError:
-            logger.exception("Failed to import row %s: %r", nr, data)
+                ExcelRecord.objects.create(nr=nr, **data)
+        except IntegrityError as e:
+            key = f"{sifra} on {data.get('prej')}"
+            logger.error("❌ DB unique constraint violation: %s", key)
+            raise ValueError(f"Duplikat në databazë: sifra {sifra} me datën {data.get('prej')} ekziston.")
+        except Exception:
+            logger.exception("⚠️ Failed to insert row %s: %r", nr, data)
             raise
         else:
             count += 1
 
-    logger.debug("Imported %d rows; skipped %d", count, len(df_skip))
-    return count
+    logger.info("✅ Imported %d rows; Skipped %d nulls; Rejected %d overlaps.",
+                count, len(df_skip), len(rejected_keys))
+    return {
+        "imported": count,
+        "batch_id": batch_id,
+        "skipped": df_skip.index.tolist(),
+        "rejected": rejected_keys,  # List of (sifra, prej, deri)
+    }

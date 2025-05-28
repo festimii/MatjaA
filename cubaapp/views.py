@@ -9,7 +9,7 @@ from django.contrib.auth import login,logout,authenticate
 from .forms import UploadExcelForm
 from django.contrib           import messages
 from .forms                   import UploadExcelForm
-from .models import ExcelUploadLog
+from .models import ExcelUploadLog, ExcelRecord
 from .services.excel_importer import import_excel_from_file, logger
 from django.shortcuts import redirect, render
 from django.urls     import reverse
@@ -1311,7 +1311,6 @@ def login_home(request):
     return render(request,'login.html',{"form":form,})
 
 
-
 @login_required(login_url="/login_home")
 def upload_excel(request):
     if request.method != "POST":
@@ -1324,24 +1323,44 @@ def upload_excel(request):
         return redirect("list_products")
 
     f = form.cleaned_data["file"]
+
+    if ExcelUploadLog.objects.filter(user=request.user, file_name=f.name).exists():
+        messages.error(
+            request,
+            f"E keni ngarkuar tashmë “{f.name}”. Ju lutemi riemëroni skedarin përpara se ta ngarkoni përsëri."
+        )
+        return redirect("list_products")
+
     try:
-        total = import_excel_from_file(f)
+        result = import_excel_from_file(f, user=request.user)
     except ValueError as e:
         messages.error(request, str(e))
         return redirect("list_products")
 
-    try:
-        ExcelUploadLog.objects.create(
-            user=request.user,
-            file_name=f.name,
-            row_count=total
-        )
-    except IntegrityError:
-        messages.error(
-            request,
-            f"You've already uploaded “{f.name}”. Rename or delete the old upload."
-        )
+    ExcelUploadLog.objects.create(
+        user=request.user,
+        file_name=f.name,
+        row_count=result["imported"],
+        batch_id=result["batch_id"]
+    )
+
+    messages.success(request, f"✅ U importuan {result['imported']} rreshta.")
+    if result["skipped"]:
+        messages.warning(request, f"⚠️ U anashkaluan {len(result['skipped'])} rreshta për mungesë të dhënash.")
+    if result["rejected"]:
+        rejected_str = "; ".join(f"{s} prej {p} deri {d}" for s, p, d in result["rejected"])
+        messages.warning(request, f"❌ {len(result['rejected'])} rreshta u refuzuan për shkak të mbivendosjes: {rejected_str}")
+
+    return redirect("list_products")
+
+
+@login_required(login_url="/login_home")
+def delete_excel_batch(request, batch_id):
+    if request.method != "POST":
+        messages.error(request, "Kërkesa e fshirjes duhet të jetë POST.")
         return redirect("list_products")
 
-    messages.success(request, f"Imported {total} records.")
+    deleted, _ = ExcelRecord.objects.filter(batch_id=batch_id, user=request.user).delete()
+    ExcelUploadLog.objects.filter(batch_id=batch_id, user=request.user).delete()
+    messages.success(request, f"✅ U fshinë {deleted} rreshta dhe logu përkatës.")
     return redirect("list_products")
